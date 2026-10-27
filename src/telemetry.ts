@@ -14,47 +14,52 @@ import { hostname } from 'os';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import Pyroscope from '@pyroscope/nodejs';
 
+import { otlpEndpoint, pyroscopeAddress, settleWithin } from './telemetryConfig';
+
 const SERVICE_NAME = process.env.OTEL_SERVICE_NAME ?? 'currency-service';
 const SERVICE_VERSION = process.env.SERVICE_VERSION ?? '1.0.0';
-// OTLP/gRPC endpoint (scheme required, e.g. http://alloy:4317). COLLECTOR_SERVICE_ADDR (host:port)
-// is kept as a legacy fallback.
-const OTEL_ENDPOINT =
-  process.env.OTEL_EXPORTER_OTLP_ENDPOINT ??
-  (process.env.COLLECTOR_SERVICE_ADDR
-    ? `http://${process.env.COLLECTOR_SERVICE_ADDR}`
-    : 'http://localhost:4317');
-const PYROSCOPE_ENDPOINT = process.env.PYROSCOPE_ADDR ?? 'http://localhost:4040';
+// See telemetryConfig.ts for the contract. Unset = off: no localhost defaults any more.
+const OTEL_ENDPOINT = otlpEndpoint(process.env);
+const PYROSCOPE_ENDPOINT = pyroscopeAddress(process.env);
 const METRIC_EXPORT_INTERVAL_MS = parseInt(process.env.OTEL_METRIC_EXPORT_INTERVAL ?? '15000', 10);
 
-const resource = resourceFromAttributes({
-  [ATTR_SERVICE_NAME]: SERVICE_NAME,
-  [ATTR_SERVICE_VERSION]: SERVICE_VERSION,
-  // Distinguishes replicas: in Kubernetes the hostname is the pod name.
-  'service.instance.id': process.env.HOSTNAME ?? hostname(),
-});
+export const telemetryEnabled = OTEL_ENDPOINT !== undefined;
+export const profilingEnabled = PYROSCOPE_ENDPOINT !== undefined;
 
-// All three signals are pushed over OTLP/gRPC to the collector (Alloy), which fans out
-// to Tempo (traces), Mimir (metrics) and Loki (logs).
-const sdk = new NodeSDK({
-  resource,
-  spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter({ url: OTEL_ENDPOINT }))],
-  metricReaders: [
-    new PeriodicExportingMetricReader({
-      exporter: new OTLPMetricExporter({ url: OTEL_ENDPOINT }),
-      exportIntervalMillis: METRIC_EXPORT_INTERVAL_MS,
-    }),
-  ],
-  logRecordProcessors: [
-    new BatchLogRecordProcessor({ exporter: new OTLPLogExporter({ url: OTEL_ENDPOINT }) }),
-  ],
-  // PinoInstrumentation forwards pino records to the OTel logs pipeline and adds trace/span ids.
-  instrumentations: [new GrpcInstrumentation(), new PinoInstrumentation()],
-});
+function startSdk(endpoint: string): NodeSDK {
+  const resource = resourceFromAttributes({
+    [ATTR_SERVICE_NAME]: SERVICE_NAME,
+    [ATTR_SERVICE_VERSION]: SERVICE_VERSION,
+    // Distinguishes replicas: in Kubernetes the hostname is the pod name.
+    'service.instance.id': process.env.HOSTNAME ?? hostname(),
+  });
 
-// Start the SDK immediately on import — server.ts does `import './telemetry'`
-// so this runs before any gRPC server/client or pino code loads, ensuring instrumentation
-// patches @grpc/grpc-js and pino before they are used.
-sdk.start();
+  // All three signals are pushed over OTLP/gRPC to the collector (Alloy), which fans out
+  // to Tempo (traces), Mimir (metrics) and Loki (logs).
+  const nodeSdk = new NodeSDK({
+    resource,
+    spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter({ url: endpoint }))],
+    metricReaders: [
+      new PeriodicExportingMetricReader({
+        exporter: new OTLPMetricExporter({ url: endpoint }),
+        exportIntervalMillis: METRIC_EXPORT_INTERVAL_MS,
+      }),
+    ],
+    logRecordProcessors: [
+      new BatchLogRecordProcessor({ exporter: new OTLPLogExporter({ url: endpoint }) }),
+    ],
+    // PinoInstrumentation forwards pino records to the OTel logs pipeline and adds trace/span ids.
+    instrumentations: [new GrpcInstrumentation(), new PinoInstrumentation()],
+  });
+
+  // Started on import — server.ts does `import './telemetry'` first, so the instrumentations
+  // patch @grpc/grpc-js and pino before they are used.
+  nodeSdk.start();
+  return nodeSdk;
+}
+
+// With telemetry off the SDK is never started: the meters below are OpenTelemetry API no-ops.
+const sdk: NodeSDK | undefined = OTEL_ENDPOINT ? startSdk(OTEL_ENDPOINT) : undefined;
 
 // ---------------------------------------------------------------------------
 // Custom gRPC server metrics
@@ -161,7 +166,7 @@ runtimeMeter
 // Event loop lag — sampled by Node's built-in histogram (cheap; a self-rescheduling setTimeout(0)
 // loop would keep the process at ~25% CPU even when idle). Reported value = mean delay since the last scrape.
 const eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
-eventLoopDelay.enable();
+if (telemetryEnabled) eventLoopDelay.enable(); // nothing reads it with telemetry off
 
 runtimeMeter
   .createObservableGauge('nodejs_eventloop_lag_seconds', {
@@ -218,17 +223,35 @@ export function startRpcMetrics(method: string): (grpcStatusCode: number) => voi
   };
 }
 
-// --- Pyroscope continuous profiling ---
-Pyroscope.init({
-  serverAddress: PYROSCOPE_ENDPOINT,
-  appName: SERVICE_NAME,
-  tags: { version: SERVICE_VERSION },
-});
-Pyroscope.start();
+// --- Pyroscope continuous profiling (only when PYROSCOPE_ADDR is set) ---
+if (PYROSCOPE_ENDPOINT) {
+  Pyroscope.init({
+    serverAddress: PYROSCOPE_ENDPOINT,
+    appName: SERVICE_NAME,
+    tags: { version: SERVICE_VERSION },
+  });
+  Pyroscope.start();
+}
 
-process.on('SIGTERM', async () => {
-  await sdk.shutdown();
-  Pyroscope.stop();
-});
+/** One line for the startup log. */
+export function describeTelemetry(): string {
+  const tel = OTEL_ENDPOINT ? `telemetry on (OTLP ${OTEL_ENDPOINT})` : 'telemetry off';
+  const prof = PYROSCOPE_ENDPOINT
+    ? `profiling on (Pyroscope ${PYROSCOPE_ENDPOINT})`
+    : 'profiling off';
+  return `${tel}, ${prof}`;
+}
+
+/**
+ * Flushes and stops the exporters and the profiler, waiting at most `timeoutMs` (an unreachable collector
+ * must not hold the process). A no-op with telemetry and profiling off. Called by server.ts on SIGTERM.
+ */
+export async function shutdownTelemetry(timeoutMs = 2000): Promise<void> {
+  const tasks: Promise<unknown>[] = [];
+  if (sdk) tasks.push(sdk.shutdown());
+  if (PYROSCOPE_ENDPOINT) tasks.push(Pyroscope.stop());
+  if (tasks.length === 0) return;
+  await settleWithin(Promise.allSettled(tasks), timeoutMs);
+}
 
 export { sdk };

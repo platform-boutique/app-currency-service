@@ -1,10 +1,11 @@
-import { startRpcMetrics } from './telemetry'; // must be first — instruments before anything else loads
+import { describeTelemetry, shutdownTelemetry, startRpcMetrics } from './telemetry'; // must be first — instruments before anything else loads
 import path from 'path';
 import fs from 'fs';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { pino } from 'pino';
 import { convertMoney, type Money, type CurrencyData } from './currency';
+import { settleWithin } from './telemetryConfig';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -123,6 +124,21 @@ function check(
 // Bootstrap
 // ---------------------------------------------------------------------------
 
+// In-flight RPCs get this long to finish after SIGTERM before they are cancelled. Drain (2 s) plus the telemetry
+// flush (at most 2 s) stays inside the charts' terminationGracePeriodSeconds: 5.
+const SHUTDOWN_GRACE_MS = 2000;
+
+async function shutdown(server: grpc.Server, signal: NodeJS.Signals): Promise<void> {
+  logger.info({ signal }, 'Received signal, shutting down');
+  // tryShutdown stops accepting new calls and waits for in-flight ones; forceShutdown cancels what is left.
+  const drained = new Promise<void>((resolve) => server.tryShutdown(() => resolve()));
+  await settleWithin(drained, SHUTDOWN_GRACE_MS);
+  server.forceShutdown();
+  logger.info('CurrencyService stopped');
+  await shutdownTelemetry();
+  process.exit(0);
+}
+
 function main(): void {
   const port = process.env.PORT ?? '7000';
 
@@ -133,12 +149,24 @@ function main(): void {
   });
   server.addService(healthProto.Health.service, { check });
 
+  let stopping = false;
+  const onSignal = (signal: NodeJS.Signals) => {
+    if (stopping) return;
+    stopping = true;
+    void shutdown(server, signal);
+  };
+  process.on('SIGTERM', onSignal);
+  process.on('SIGINT', onSignal);
+
   server.bindAsync(`[::]:${port}`, grpc.ServerCredentials.createInsecure(), (err, boundPort) => {
     if (err) {
       logger.error({ err }, 'Failed to bind gRPC server');
       process.exit(1);
     }
-    logger.info({ port: boundPort }, 'CurrencyService gRPC server started');
+    logger.info(
+      { port: boundPort },
+      `CurrencyService gRPC server started (${describeTelemetry()})`,
+    );
   });
 }
 
