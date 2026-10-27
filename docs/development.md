@@ -9,7 +9,7 @@ npm ci
 npm run build && npm start          # compiled
 npm run dev                         # ts-node, no build step
 npm run client                      # built-in smoke-test client (talks to localhost:$PORT)
-npm test                            # jest unit tests
+npm test                            # jest: unit tests + a process test (ts-node, telemetry unset, SIGTERM exits 0)
 npm run lint && npm run typecheck
 
 docker build -t currency-service .
@@ -33,9 +33,10 @@ grpcurl -plaintext -proto proto/health.proto localhost:7000 grpc.health.v1.Healt
 
 ```
 ├── src/
-│   ├── server.ts        # gRPC server bootstrap, handlers (GetSupportedCurrencies, Convert, Check)
+│   ├── server.ts        # gRPC server bootstrap, handlers (GetSupportedCurrencies, Convert, Check), SIGTERM
 │   ├── currency.ts      # pure conversion logic (carry, convertMoney)
-│   ├── telemetry.ts     # OTel SDK, Prometheus exporter, RPC metrics, runtime gauges, Pyroscope
+│   ├── telemetry.ts     # OTel SDK, RPC metrics, runtime gauges, Pyroscope (each only when enabled), bounded shutdown
+│   ├── telemetryConfig.ts  # telemetry contract (pure functions, unit tested)
 │   └── client.ts        # smoke-test client
 ├── proto/               # currency.proto, health.proto (loaded at runtime by @grpc/proto-loader)
 ├── data/currency_conversion.json   # EUR-based rates (33 currencies)

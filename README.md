@@ -39,17 +39,20 @@ Rates live in [`data/currency_conversion.json`](data/currency_conversion.json) a
 |---|---|---|
 | `PORT` | `7000` | gRPC listen port. **Must be set when relying on the Docker `HEALTHCHECK`** (see below) |
 | `NODE_ENV` | `production` (set in image) | |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP/**gRPC** endpoint for **traces, metrics and logs** (scheme required), e.g. `http://alloy.monitoring.svc.cluster.local:4317`. Legacy fallback: `COLLECTOR_SERVICE_ADDR` (`host:port`) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (telemetry off) | OTLP/**gRPC** endpoint for **traces, metrics and logs** (scheme required), e.g. `http://alloy.monitoring.svc.cluster.local:4317`. Legacy fallback: `COLLECTOR_SERVICE_ADDR` (`host:port`). Telemetry is on only when one of them is set and non-empty |
+| `OTEL_SDK_DISABLED` | — | `true` forces telemetry off even with an endpoint set (the legacy `ENABLE_TRACING=0` does the same) |
 | `OTEL_METRIC_EXPORT_INTERVAL` | `15000` | Milliseconds between metric pushes |
 | `OTEL_SERVICE_NAME` | `currency-service` | `service.name` — becomes the Prometheus `job` and the Loki `service_name`; keep the default, dashboards depend on it |
 | `SERVICE_VERSION` | `1.0.0` | `service.version` resource attribute |
-| `PYROSCOPE_ADDR` | `http://localhost:4040` | Profiles use the Pyroscope SDK push protocol (**not** OTLP). Point it at Alloy (`http://alloy.monitoring.svc.cluster.local:4040`), which forwards to Pyroscope, or directly at Pyroscope |
+| `PYROSCOPE_ADDR` | unset (profiling off) | Profiles use the Pyroscope SDK push protocol (**not** OTLP). Point it at Alloy (`http://alloy.monitoring.svc.cluster.local:4040`), which forwards to Pyroscope, or directly at Pyroscope. Profiling is on only when this is set and non-empty |
+| `ENABLE_PROFILING` | — | `0` forces profiling off even with `PYROSCOPE_ADDR` set; any other value (or unset) leaves the decision to `PYROSCOPE_ADDR` |
 
 Notes:
 
 - Telemetry is **pushed**, not scraped: traces, metrics and logs share one OTLP/gRPC endpoint (Alloy); profiles go to Pyroscope (via Alloy). `service.instance.id` is the pod hostname, so replicas stay distinct in Mimir.
-- The former Prometheus endpoint (`METRICS_PORT`) no longer exists. Logs keep going to stdout and are additionally exported over OTLP with trace ids.
-- Telemetry and profiling cannot be switched off with a flag; with no reachable collector the exporters just log errors and the service keeps serving.
+- The former Prometheus endpoint (`METRICS_PORT`) no longer exists. Logs go to stdout as JSON and, with telemetry on, are additionally exported over OTLP with trace ids.
+- With every telemetry variable unset the service starts with telemetry and profiling off: the `NodeSDK` and Pyroscope are not started (the modules are still loaded), the RPC instruments and runtime gauges are OpenTelemetry API no-ops, and the only startup line is `CurrencyService gRPC server started (telemetry off, profiling off)` (verified from the build and in the image).
+- With an endpoint set but no reachable collector, the service keeps serving and still exits promptly on `SIGTERM` (measured: 0.09 s).
 
 ## Container image
 
@@ -61,7 +64,7 @@ Multi-stage [`Dockerfile`](Dockerfile):
 | runtime | `node:22.22.2-alpine3.23` | copies `node_modules`, `dist/`, `proto/`, `data/`; runs as non-root |
 
 - **Entrypoint:** `node dist/server.js` (working dir `/app`).
-- **User:** `appuser` — UID `100`, GID `101` (verified). Set `runAsUser: 100` for `runAsNonRoot`.
+- **User:** numeric `USER 100:101` (`appuser`/`appgroup`, created with these fixed ids; `id` in the container prints `uid=100(appuser) gid=101(appgroup)`). Matches the chart's `runAsUser: 100` / `runAsGroup: 101`.
 - **EXPOSE:** `7000` only.
 - **Docker `HEALTHCHECK`:** a `grpc-js` client connecting to `localhost:$PORT`. Because the command reads `process.env.PORT` directly (no default), **it fails if `PORT` is not set** in the container — compose sets `PORT=7000`. Kubernetes ignores this check anyway, but set `PORT` explicitly in the Deployment for parity.
 - **Image size:** ~73 MB.
@@ -93,7 +96,7 @@ livenessProbe:
 
 The Node health handler implements `Check` only (no `Watch`); Kubernetes `grpc:` probes only call `Check`, so this works. Startup takes ~1–2 s.
 
-**Graceful shutdown:** the service registers a `SIGTERM` handler that flushes OpenTelemetry/Pyroscope but never exits the process, so Node keeps running until the kubelet's `SIGKILL`. Set `terminationGracePeriodSeconds: 5` (default 30 s would only delay rollouts).
+**Graceful shutdown:** on `SIGTERM` (and `SIGINT`) the server stops accepting new calls (`tryShutdown`), gives in-flight ones up to 2 s before `forceShutdown`, flushes telemetry when it is on (bounded at 2 s) and exits `0`. The worst case (4 s) fits the chart's `terminationGracePeriodSeconds: 5`. Measured: `docker stop` on the idle container returned in 0.24 s with exit code 0; running the build against a stub OTLP receiver, the final traces, metrics and logs batches arrived after `SIGTERM` and the process exited 0.
 
 **Security context**
 
@@ -129,10 +132,10 @@ and was verified under the `restricted` Pod Security Standard on the earlier loc
 
 | Signal | Implementation | Destination |
 |---|---|---|
-| **Traces** | OpenTelemetry `NodeSDK` + `GrpcInstrumentation`, OTLP/gRPC exporter (`BatchSpanProcessor`) | Alloy `:4317` → Tempo |
+| **Traces** | OpenTelemetry `NodeSDK` + `GrpcInstrumentation`, OTLP/gRPC exporter (`BatchSpanProcessor`); only when telemetry is on | Alloy `:4317` → Tempo |
 | **Metrics** | Hand-rolled RPC instruments (`GrpcInstrumentation` emits traces only) + Node runtime gauges, `PeriodicExportingMetricReader` over OTLP/gRPC every 15 s (replaces the Prometheus exporter) | Alloy → Mimir |
-| **Logs** | `pino` JSON to stdout **and** `@opentelemetry/instrumentation-pino` forwarding records over OTLP/gRPC with trace ids | Alloy → Loki |
-| **Profiles** | `@pyroscope/nodejs`, tagged with `version` | Alloy `:4040` → Pyroscope |
+| **Logs** | `pino` JSON to stdout (always) **and** `@opentelemetry/instrumentation-pino` forwarding records over OTLP/gRPC with trace ids (only when telemetry is on) | Alloy → Loki |
+| **Profiles** | `@pyroscope/nodejs`, tagged with `version`; only when profiling is on | Alloy `:4040` → Pyroscope |
 
 Metric names: `rpc_server_duration_seconds_{bucket,count,sum}` (buckets 1 ms … 10 s; the unit `s` yields the `_seconds` suffix), `rpc_server_requests_total`, `rpc_server_active_requests` (labels `rpc_system`, `rpc_service`, `rpc_method`, `rpc_grpc_status_code`), plus `nodejs_*` runtime gauges (heap, RSS, CPU, event-loop lag, active handles). The event-loop lag is sampled with Node's `monitorEventLoopDelay` histogram — the earlier self-rescheduling `setTimeout(0)` probe kept an idle pod at ~25 % CPU, which would have kept an HPA scaling out.
 
@@ -147,7 +150,7 @@ npm ci
 npm run build && npm start          # compiled
 npm run dev                         # ts-node, no build step
 npm run client                      # built-in smoke-test client (talks to localhost:$PORT)
-npm test                            # jest unit tests
+npm test                            # jest: unit tests + a process test (ts-node, telemetry unset, SIGTERM exits 0)
 npm run lint && npm run typecheck
 
 docker build -t currency-service .
@@ -171,9 +174,10 @@ grpcurl -plaintext -proto proto/health.proto localhost:7000 grpc.health.v1.Healt
 
 ```
 ├── src/
-│   ├── server.ts        # gRPC server bootstrap, handlers (GetSupportedCurrencies, Convert, Check)
+│   ├── server.ts        # gRPC server bootstrap, handlers (GetSupportedCurrencies, Convert, Check), SIGTERM
 │   ├── currency.ts      # pure conversion logic (carry, convertMoney)
-│   ├── telemetry.ts     # OTel SDK, Prometheus exporter, RPC metrics, runtime gauges, Pyroscope
+│   ├── telemetry.ts     # OTel SDK, RPC metrics, runtime gauges, Pyroscope (each only when enabled), bounded shutdown
+│   ├── telemetryConfig.ts  # telemetry contract (pure functions, unit tested)
 │   └── client.ts        # smoke-test client
 ├── proto/               # currency.proto, health.proto (loaded at runtime by @grpc/proto-loader)
 ├── data/currency_conversion.json   # EUR-based rates (33 currencies)
@@ -188,5 +192,6 @@ grpcurl -plaintext -proto proto/health.proto localhost:7000 grpc.health.v1.Healt
 - Rates are a static snapshot; they are never refreshed.
 - The rates file is read and parsed from disk on every request (cheap for 33 entries, but not free).
 - Conversion uses floating-point arithmetic and truncates; results can be off by a nano-unit.
-- `SIGTERM` does not terminate the process (see Graceful shutdown).
+- With telemetry off the OTel SDK and Pyroscope modules are still loaded (static imports, including the pprof native module); they are just never started.
+- Health stays `SERVING` during the 2 s shutdown drain (it is static).
 - The Docker `HEALTHCHECK` depends on `PORT` being set.

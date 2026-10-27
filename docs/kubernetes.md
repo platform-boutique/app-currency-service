@@ -25,7 +25,7 @@ livenessProbe:
 
 The Node health handler implements `Check` only (no `Watch`); Kubernetes `grpc:` probes only call `Check`, so this works. Startup takes ~1–2 s.
 
-**Graceful shutdown:** the service registers a `SIGTERM` handler that flushes OpenTelemetry/Pyroscope but never exits the process, so Node keeps running until the kubelet's `SIGKILL`. Set `terminationGracePeriodSeconds: 5` (default 30 s would only delay rollouts).
+**Graceful shutdown:** on `SIGTERM` (and `SIGINT`) the server stops accepting new calls (`tryShutdown`), gives in-flight ones up to 2 s before `forceShutdown`, flushes telemetry when it is on (bounded at 2 s) and exits `0`. The worst case (4 s) fits the chart's `terminationGracePeriodSeconds: 5`. Measured: `docker stop` on the idle container returned in 0.24 s with exit code 0; running the build against a stub OTLP receiver, the final traces, metrics and logs batches arrived after `SIGTERM` and the process exited 0.
 
 **Security context**
 
