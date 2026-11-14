@@ -1,6 +1,8 @@
 name: CI
 
-# Pull-request gate. Nothing runs on a plain push; images are published by release.yaml.
+# Pull-request gate: guards (change detection, secrets, workflows) start at t=0; when code changed, lint, build, tests, SCA, SAST
+# and an image build + CVE scan run in parallel with them (the image is pushed as ghcr.io/<repo>:tree-<hash> and reused by Publish
+# after the merge). The only required status check is `ci / gate`; `merge` comes after it and is not part of it.
 on:
   pull_request:
     branches: [main]
@@ -13,25 +15,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  node:
+  ci:
     permissions:
       contents: read
-      pull-requests: read # gitleaks lists the PR's commits through the API
-    uses: platform-boutique/platform-demo-workflows/.github/workflows/node-ci.yaml@28d80c1d4abd81c1529bf593a874640132692e8a # v2.0.2
+      packages: write # the image job pushes ghcr.io/<repo>:tree-<hash> (same-repository runs; a fork's token stays read-only)
+    uses: platform-boutique/platform-demo-workflows/.github/workflows/service-ci-node.yaml@9e7a60340fa0720de3fdd72147342e9f5abcbbd3 # v3.6.0
     with:
       smoke-port: "7000"
       smoke-script: .github/smoke.sh
-
-  image:
-    needs: [node]
-    permissions:
-      contents: read
-      packages: write
-    uses: platform-boutique/platform-demo-workflows/.github/workflows/docker-build.yaml@28d80c1d4abd81c1529bf593a874640132692e8a # v2.0.2
-    with:
       trivyignores: .trivyignore
 
-  workflows:
+  # The merge button: waits for you to approve the environment `merge` on the run page (Review deployments), then squash-merges the
+  # tested pull request and starts Publish. Not for forks or Dependabot (read-only token): use the normal Merge button there.
+  merge:
+    needs: ci
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
     permissions:
-      contents: read
-    uses: platform-boutique/platform-demo-workflows/.github/workflows/workflow-lint.yaml@28d80c1d4abd81c1529bf593a874640132692e8a # v2.0.2
+      contents: write
+      pull-requests: write
+      actions: write # starts Publish
+    uses: platform-boutique/platform-demo-workflows/.github/workflows/service-merge.yaml@9e7a60340fa0720de3fdd72147342e9f5abcbbd3 # v3.6.0
