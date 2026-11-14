@@ -16,7 +16,7 @@ docker build -t currency-service .
 docker run --rm -p 7000:7000 -e PORT=7000 currency-service
 ```
 
-### Manual gRPC testing (no reflection — pass the proto)
+### Manual gRPC testing (reflection is on; `-proto` also works)
 
 ```bash
 grpcurl -plaintext -proto proto/currency.proto -d '{}' \

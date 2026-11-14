@@ -7,6 +7,7 @@ import * as protoLoader from '@grpc/proto-loader';
 import { createLogger } from './logger';
 import { convertMoney, type Money, type CurrencyData } from './currency';
 import { settleWithin } from './telemetryConfig';
+import { addReflection } from './reflection';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -23,19 +24,20 @@ const logger = createLogger(telemetryConfig.serviceName, undefined, {
 const CURRENCY_PROTO_PATH = path.join(__dirname, '../proto/currency.proto');
 const HEALTH_PROTO_PATH = path.join(__dirname, '../proto/health.proto');
 
-function loadProto(protoPath: string) {
-  const packageDefinition = protoLoader.loadSync(protoPath, {
+function loadDefinition(protoPath: string) {
+  return protoLoader.loadSync(protoPath, {
     keepCase: true,
     longs: String,
     enums: String,
     defaults: true,
     oneofs: true,
   });
-  return grpc.loadPackageDefinition(packageDefinition);
 }
 
-const currencyProto = (loadProto(CURRENCY_PROTO_PATH) as any).hipstershop;
-const healthProto = (loadProto(HEALTH_PROTO_PATH) as any).grpc.health.v1;
+const currencyDefinition = loadDefinition(CURRENCY_PROTO_PATH);
+const healthDefinition = loadDefinition(HEALTH_PROTO_PATH);
+const currencyProto = (grpc.loadPackageDefinition(currencyDefinition) as any).hipstershop;
+const healthProto = (grpc.loadPackageDefinition(healthDefinition) as any).grpc.health.v1;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -143,6 +145,7 @@ function main(): void {
     convert,
   });
   server.addService(healthProto.Health.service, { check });
+  addReflection(server, currencyDefinition, healthDefinition);
 
   let stopping = false;
   const onSignal = (signal: NodeJS.Signals) => {

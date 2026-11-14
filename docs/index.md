@@ -32,12 +32,12 @@ flowchart LR
 | **Language / runtime** | TypeScript on Node.js 22 (`@grpc/grpc-js`) |
 | **Image** | `mladenovskistefan/currency-service` |
 | **Protocol / port** | gRPC (HTTP/2, plaintext) on `7000` |
-| **Metrics** | Pushed over OTLP/gRPC to Alloy → Mimir every 15 s (no scrape endpoint). Dashboard names: `rpc_server_duration_seconds_{bucket,count,sum}`, `rpc_server_requests_total`, `rpc_server_active_requests` |
+| **Metrics** | Pushed over OTLP/gRPC to Alloy → Mimir every 15 s (no scrape endpoint). Dashboard names: `rpc_server_duration_seconds_{bucket,count,sum}`, `rpc_server_requests_total`, `rpc_server_active_requests`, `build_info` |
 | **Health** | `grpc.health.v1.Health/Check` on `7000` — static `SERVING` |
 | **State** | None. Rates are read from `data/currency_conversion.json` (static, not live) |
 | **Depends on** | Nothing (optional: OTLP collector, Pyroscope) |
 | **Called by** | `frontend` (`GetSupportedCurrencies`, `Convert`), `checkout-service` (`Convert`) |
-| **gRPC reflection** | Not enabled — pass `-proto` to `grpcurl` |
+| **gRPC reflection** | Enabled (v1 and v1alpha, `@grpc/reflection`): `grpcurl -plaintext localhost:7000 list` works without the proto files |
 
 ## Find it elsewhere
 
