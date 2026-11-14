@@ -37,6 +37,8 @@ grpcurl -plaintext -proto proto/health.proto localhost:7000 grpc.health.v1.Healt
 │   ├── currency.ts      # pure conversion logic (carry, convertMoney)
 │   ├── telemetry.ts     # OTel SDK, RPC metrics, runtime gauges, Pyroscope (each only when enabled), bounded shutdown
 │   ├── telemetryConfig.ts  # telemetry contract (pure functions, unit tested)
+│   ├── logger.ts        # pino factory: shared log shape, trace ids from the active span
+│   ├── fatal.ts         # uncaught exceptions / rejections as one JSON line, exit 1
 │   └── client.ts        # smoke-test client
 ├── proto/               # currency.proto, health.proto (loaded at runtime by @grpc/proto-loader)
 ├── data/currency_conversion.json   # EUR-based rates (33 currencies)

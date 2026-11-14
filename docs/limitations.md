@@ -5,4 +5,3 @@
 - Conversion uses floating-point arithmetic and truncates; results can be off by a nano-unit.
 - With telemetry off the OTel SDK and Pyroscope modules are still loaded (static imports, including the pprof native module); they are just never started.
 - Health stays `SERVING` during the 2 s shutdown drain (it is static).
-- The Docker `HEALTHCHECK` depends on `PORT` being set.

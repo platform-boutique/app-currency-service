@@ -10,5 +10,5 @@ Multi-stage [`Dockerfile`](https://github.com/platform-boutique/app-currency-ser
 - **Entrypoint:** `node dist/server.js` (working dir `/app`).
 - **User:** numeric `USER 100:101` (`appuser`/`appgroup`, created with these fixed ids; `id` in the container prints `uid=100(appuser) gid=101(appgroup)`). Matches the chart's `runAsUser: 100` / `runAsGroup: 101`.
 - **EXPOSE:** `7000` only.
-- **Docker `HEALTHCHECK`:** a `grpc-js` client connecting to `localhost:$PORT`. Because the command reads `process.env.PORT` directly (no default), **it fails if `PORT` is not set** in the container — compose sets `PORT=7000`. Kubernetes ignores this check anyway, but set `PORT` explicitly in the Deployment for parity.
+- **Docker `HEALTHCHECK`:** a `grpc-js` client connecting to `localhost:$PORT`, falling back to 7000 like the server (it used to probe `localhost:undefined` when `PORT` was unset; fixed, the probe command was not run against a rebuilt image). Kubernetes ignores this check anyway.
 - **Image size:** ~73 MB.
