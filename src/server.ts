@@ -1,9 +1,10 @@
-import { describeTelemetry, shutdownTelemetry, startRpcMetrics } from './telemetry'; // must be first — instruments before anything else loads
+import './fatal'; // first: uncaught errors, also while loading, are one JSON line
+import { shutdownTelemetry, startRpcMetrics, telemetryConfig } from './telemetry'; // must be first — instruments before anything else loads
 import path from 'path';
 import fs from 'fs';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
-import { pino } from 'pino';
+import { createLogger } from './logger';
 import { convertMoney, type Money, type CurrencyData } from './currency';
 import { settleWithin } from './telemetryConfig';
 
@@ -11,14 +12,8 @@ import { settleWithin } from './telemetryConfig';
 // Logger
 // ---------------------------------------------------------------------------
 
-const logger = pino({
-  name: 'currency-service',
-  messageKey: 'message',
-  formatters: {
-    level(label) {
-      return { severity: label };
-    },
-  },
+const logger = createLogger(telemetryConfig.serviceName, undefined, {
+  version: telemetryConfig.serviceVersion,
 });
 
 // ---------------------------------------------------------------------------
@@ -77,7 +72,7 @@ function getSupportedCurrencies(
     endMetrics(grpc.status.OK);
     callback(null, { currency_codes: Object.keys(data) });
   } catch (err) {
-    logger.error({ err }, 'Failed to get supported currencies');
+    logger.error({ error: err }, 'Failed to get supported currencies');
     endMetrics(grpc.status.INTERNAL);
     callback({
       code: grpc.status.INTERNAL,
@@ -107,7 +102,7 @@ function convert(
     endMetrics(grpc.status.OK);
     callback(null, result.value);
   } catch (err) {
-    logger.error({ err }, 'Currency conversion failed');
+    logger.error({ error: err }, 'Currency conversion failed');
     endMetrics(grpc.status.INTERNAL);
     callback({ code: grpc.status.INTERNAL, message: 'Conversion failed' });
   }
@@ -160,12 +155,17 @@ function main(): void {
 
   server.bindAsync(`[::]:${port}`, grpc.ServerCredentials.createInsecure(), (err, boundPort) => {
     if (err) {
-      logger.error({ err }, 'Failed to bind gRPC server');
+      logger.error({ error: err }, 'Failed to bind gRPC server');
       process.exit(1);
     }
     logger.info(
-      { port: boundPort },
-      `CurrencyService gRPC server started (${describeTelemetry()})`,
+      {
+        commit: telemetryConfig.serviceCommit,
+        port: boundPort,
+        telemetry: telemetryConfig.telemetryReason,
+        profiling: telemetryConfig.profilingReason,
+      },
+      'starting',
     );
   });
 }
