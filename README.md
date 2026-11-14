@@ -11,12 +11,12 @@ Part of the [platform-demo](https://github.com/platform-boutique) platform — m
 | **Language / runtime** | TypeScript on Node.js 22 (`@grpc/grpc-js`) |
 | **Image** | `mladenovskistefan/currency-service` |
 | **Protocol / port** | gRPC (HTTP/2, plaintext) on `7000` |
-| **Metrics** | Pushed over OTLP/gRPC to Alloy → Mimir every 15 s (no scrape endpoint). Dashboard names: `rpc_server_duration_seconds_{bucket,count,sum}`, `rpc_server_requests_total`, `rpc_server_active_requests` |
+| **Metrics** | Pushed over OTLP/gRPC to Alloy → Mimir every 15 s (no scrape endpoint). Dashboard names: `rpc_server_duration_seconds_{bucket,count,sum}`, `rpc_server_requests_total`, `rpc_server_active_requests`, `build_info` |
 | **Health** | `grpc.health.v1.Health/Check` on `7000` — static `SERVING` |
 | **State** | None. Rates are read from `data/currency_conversion.json` (static, not live) |
 | **Depends on** | Nothing (optional: OTLP collector, Pyroscope) |
 | **Called by** | `frontend` (`GetSupportedCurrencies`, `Convert`), `checkout-service` (`Convert`) |
-| **gRPC reflection** | Not enabled — pass `-proto` to `grpcurl` |
+| **gRPC reflection** | Enabled (v1 and v1alpha, `@grpc/reflection`): `grpcurl -plaintext localhost:7000 list` works without the proto files |
 
 ## API
 
@@ -47,7 +47,7 @@ Rates live in [`data/currency_conversion.json`](data/currency_conversion.json) a
 | `OTEL_METRIC_EXPORT_INTERVAL` | `15000` | Milliseconds between metric pushes |
 | `OTEL_SERVICE_NAME` | `currency-service` | `service.name`; becomes the Prometheus `job` and the Loki `service_name`; keep the default, dashboards depend on it |
 | `SERVICE_VERSION` | `dev` | `service.version` resource attribute, the `version` field of every log line and the Pyroscope tag |
-| `SERVICE_COMMIT` | `unknown` | Commit id, logged once in the `starting` line (the image build does not set it yet) |
+| `SERVICE_COMMIT` | `unknown` | Commit id, logged once in the `starting` line and the `commit` label of `build_info` |
 | `DEPLOYMENT_ENVIRONMENT` | `local` | `deployment.environment` resource attribute, Pyroscope tag `environment` |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warning` (or `warn`) or `error`, any case; anything else means `info` |
 | `PYROSCOPE_ADDR` | unset (profiling off) | Absolute `http(s)` URL. Profiles use the Pyroscope SDK push protocol (**not** OTLP). Point it at Alloy (`http://alloy.monitoring.svc.cluster.local:4040`), which forwards to Pyroscope, or directly at Pyroscope. No default address: profiling is on only if this is a valid URL |
@@ -145,7 +145,7 @@ and was verified under the `restricted` Pod Security Standard on the earlier loc
 | **Logs** | `pino` JSON to stdout (always) in the shared shape (`timestamp`, `severity`, `message`, `service`, `version`, `trace_id`, `span_id`, `error`; the ids come from the active span via a pino `mixin`) **and** `@opentelemetry/instrumentation-pino` forwarding records over OTLP/gRPC (only when telemetry is on; its own log correlation is off, so no duplicate fields) | stdout → Alloy → Loki; OTLP → Alloy → Loki |
 | **Profiles** | `@pyroscope/nodejs`, only with `PYROSCOPE_ADDR`; tags `service_name`, `version`, `environment` | Alloy `:4040` → Pyroscope |
 
-Metric names: `rpc_server_duration_seconds_{bucket,count,sum}` (buckets 1 ms … 10 s; the unit `s` yields the `_seconds` suffix), `rpc_server_requests_total`, `rpc_server_active_requests` (labels `rpc_system`, `rpc_service`, `rpc_method`, `rpc_grpc_status_code`), plus `nodejs_*` runtime gauges (heap, RSS, CPU, event-loop lag, active handles). The event-loop lag is sampled with Node's `monitorEventLoopDelay` histogram — the earlier self-rescheduling `setTimeout(0)` probe kept an idle pod at ~25 % CPU, which would have kept an HPA scaling out.
+Metric names: `rpc_server_duration_seconds_{bucket,count,sum}` (buckets 1 ms … 10 s; the unit `s` yields the `_seconds` suffix), `rpc_server_requests_total`, `rpc_server_active_requests` (labels `rpc_system`, `rpc_service`, `rpc_method`, `rpc_grpc_status_code`), plus `nodejs_*` runtime gauges (heap, RSS, CPU, event-loop lag, active handles) and `build_info{service,version,commit}` (always 1; version and commit come from `SERVICE_VERSION` / `SERVICE_COMMIT`, `dev` / `unknown` when unset). The event-loop lag is sampled with Node's `monitorEventLoopDelay` histogram — the earlier self-rescheduling `setTimeout(0)` probe kept an idle pod at ~25 % CPU, which would have kept an HPA scaling out.
 
 Every series carries `job="currency-service"` (from `service.name`) and `instance=<pod name>` (`service.instance.id`), which is what the Grafana dashboards select on. Logs land in Loki with `service_name="currency-service"` and trace/span ids, so a log line links to its trace.
 
@@ -167,7 +167,7 @@ docker build -t currency-service .
 docker run --rm -p 7000:7000 -e PORT=7000 currency-service
 ```
 
-### Manual gRPC testing (no reflection — pass the proto)
+### Manual gRPC testing (reflection is on; `-proto` also works)
 
 ```bash
 grpcurl -plaintext -proto proto/currency.proto -d '{}' \

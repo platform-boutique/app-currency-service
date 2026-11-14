@@ -18,6 +18,7 @@ import {
   resourceAttributes,
   settleWithin,
 } from './telemetryConfig';
+import { registerBuildInfo } from './metrics';
 
 // Telemetry contract: see telemetryConfig.ts. Unset = off: no localhost defaults.
 export const telemetryConfig = resolveTelemetryConfig(process.env);
@@ -73,6 +74,8 @@ const sdk: NodeSDK | undefined = OTEL_ENDPOINT ? startSdk(OTEL_ENDPOINT) : undef
 
 const meter = api.metrics.getMeter('currency-service-grpc');
 const runtimeMeter = api.metrics.getMeter('currency-service-runtime');
+
+registerBuildInfo(runtimeMeter, telemetryConfig);
 
 const rpcServerDuration = meter.createHistogram('rpc_server_duration', {
   description: 'Duration of inbound gRPC calls in seconds',

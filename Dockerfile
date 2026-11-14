@@ -50,7 +50,8 @@ USER 10001:10001
 
 EXPOSE 7000
 
+# Exec form (CODE-03): runs node directly, no shell, nc or curl needed.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "const grpc=require('@grpc/grpc-js');const c=new grpc.Client('localhost:'+(process.env.PORT||7000),grpc.credentials.createInsecure());c.waitForReady(Date.now()+3000,e=>{process.exit(e?1:0)})"
+  CMD ["node", "-e", "const grpc=require('@grpc/grpc-js');const c=new grpc.Client('localhost:'+(process.env.PORT||7000),grpc.credentials.createInsecure());c.waitForReady(Date.now()+3000,e=>{process.exit(e?1:0)})"]
 
 ENTRYPOINT ["node", "dist/server.js"]
