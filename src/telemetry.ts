@@ -1,6 +1,5 @@
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { resourceFromAttributes } from '@opentelemetry/resources';
-import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc';
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-grpc';
@@ -10,29 +9,28 @@ import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { GrpcInstrumentation } from '@opentelemetry/instrumentation-grpc';
 import { PinoInstrumentation } from '@opentelemetry/instrumentation-pino';
 import * as api from '@opentelemetry/api';
-import { hostname } from 'os';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import Pyroscope from '@pyroscope/nodejs';
 
-import { otlpEndpoint, pyroscopeAddress, settleWithin } from './telemetryConfig';
+import {
+  pyroscopeTags,
+  resolveTelemetryConfig,
+  resourceAttributes,
+  settleWithin,
+} from './telemetryConfig';
 
-const SERVICE_NAME = process.env.OTEL_SERVICE_NAME ?? 'currency-service';
-const SERVICE_VERSION = process.env.SERVICE_VERSION ?? '1.0.0';
-// See telemetryConfig.ts for the contract. Unset = off: no localhost defaults any more.
-const OTEL_ENDPOINT = otlpEndpoint(process.env);
-const PYROSCOPE_ENDPOINT = pyroscopeAddress(process.env);
-const METRIC_EXPORT_INTERVAL_MS = parseInt(process.env.OTEL_METRIC_EXPORT_INTERVAL ?? '15000', 10);
+// Telemetry contract: see telemetryConfig.ts. Unset = off: no localhost defaults.
+export const telemetryConfig = resolveTelemetryConfig(process.env);
+const SERVICE_NAME = telemetryConfig.serviceName;
+const OTEL_ENDPOINT = telemetryConfig.otlpEndpoint ?? undefined;
+const PYROSCOPE_ENDPOINT = telemetryConfig.pyroscopeAddr ?? undefined;
+const METRIC_EXPORT_INTERVAL_MS = telemetryConfig.metricExportIntervalMs;
 
 export const telemetryEnabled = OTEL_ENDPOINT !== undefined;
 export const profilingEnabled = PYROSCOPE_ENDPOINT !== undefined;
 
 function startSdk(endpoint: string): NodeSDK {
-  const resource = resourceFromAttributes({
-    [ATTR_SERVICE_NAME]: SERVICE_NAME,
-    [ATTR_SERVICE_VERSION]: SERVICE_VERSION,
-    // Distinguishes replicas: in Kubernetes the hostname is the pod name.
-    'service.instance.id': process.env.HOSTNAME ?? hostname(),
-  });
+  const resource = resourceFromAttributes(resourceAttributes(telemetryConfig));
 
   // All three signals are pushed over OTLP/gRPC to the collector (Alloy), which fans out
   // to Tempo (traces), Mimir (metrics) and Loki (logs).
@@ -48,8 +46,13 @@ function startSdk(endpoint: string): NodeSDK {
     logRecordProcessors: [
       new BatchLogRecordProcessor({ exporter: new OTLPLogExporter({ url: endpoint }) }),
     ],
-    // PinoInstrumentation forwards pino records to the OTel logs pipeline and adds trace/span ids.
-    instrumentations: [new GrpcInstrumentation(), new PinoInstrumentation()],
+    // PinoInstrumentation forwards pino records to the OTel logs pipeline (OTLP records carry the active span).
+    // The trace_id/span_id on stdout come from the logger's own mixin (logger.ts), so the instrumentation's
+    // log correlation (extra trace_flags field, duplicate keys) is switched off.
+    instrumentations: [
+      new GrpcInstrumentation(),
+      new PinoInstrumentation({ disableLogCorrelation: true }),
+    ],
   });
 
   // Started on import — server.ts does `import './telemetry'` first, so the instrumentations
@@ -228,18 +231,9 @@ if (PYROSCOPE_ENDPOINT) {
   Pyroscope.init({
     serverAddress: PYROSCOPE_ENDPOINT,
     appName: SERVICE_NAME,
-    tags: { version: SERVICE_VERSION },
+    tags: pyroscopeTags(telemetryConfig),
   });
   Pyroscope.start();
-}
-
-/** One line for the startup log. */
-export function describeTelemetry(): string {
-  const tel = OTEL_ENDPOINT ? `telemetry on (OTLP ${OTEL_ENDPOINT})` : 'telemetry off';
-  const prof = PYROSCOPE_ENDPOINT
-    ? `profiling on (Pyroscope ${PYROSCOPE_ENDPOINT})`
-    : 'profiling off';
-  return `${tel}, ${prof}`;
 }
 
 /**
