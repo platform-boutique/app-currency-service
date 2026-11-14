@@ -3,3 +3,22 @@ dist/
 *.env
 .env*
 *.log
+# Coverage, TechDocs build output, key material
+coverage/
+/site/
+.venv/
+*.pem
+*.key
+
+# IDE and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Agent / session notes: never committed
+STATUS.md
+NOTES*.md
+PLAN.md
+.claude/
