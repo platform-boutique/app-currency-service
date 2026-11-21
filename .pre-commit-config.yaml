@@ -1,8 +1,9 @@
-# Local secret blocking. One-time setup per clone:  pipx install pre-commit && pre-commit install
-# - every commit: gitleaks scans the staged changes, plus private-key / large-file checks
-# - every push:   gitleaks scans the commits being pushed before anything leaves the machine
-# This is a fast local guard (git push --no-verify skips it); GitHub push protection and the
-# CI secret scan are the enforcing layers.
+# Local guard that runs the same checks as CI. One-time setup per clone:  pipx install pre-commit && pre-commit install
+# - every commit: gitleaks scans the staged changes, private-key / large-file checks, prettier and eslint
+# - every push:   gitleaks scans the commits being pushed, tsc typecheck
+# Format and lint use the same tools and pinned versions as the shared CI workflow (platform-demo-workflows), so a clean
+# local run means the `Lint & Format` job passes. This is a fast local guard (git push --no-verify skips it); the CI jobs,
+# GitHub push protection and the CI secret scan are the enforcing layers.
 default_install_hook_types: [pre-commit, pre-push]
 
 repos:
@@ -22,6 +23,28 @@ repos:
 
   - repo: local
     hooks:
+      # Need `npm ci` once (the tools come from node_modules, the versions from package-lock.json); the same npm scripts as CI.
+      - id: prettier-check
+        name: prettier (npm run format:check, as CI)
+        language: system
+        entry: npm run format:check
+        types: [ts]
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: eslint
+        name: eslint (npm run lint, as CI)
+        language: system
+        entry: npm run lint
+        types: [ts]
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: typecheck
+        name: tsc (npm run typecheck, as CI)
+        language: system
+        entry: npm run typecheck
+        types: [ts]
+        pass_filenames: false
+        stages: [pre-push]
       - id: gitleaks-push
         name: gitleaks (commits being pushed)
         language: golang

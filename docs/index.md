@@ -17,6 +17,8 @@ A gRPC service that converts monetary amounts between currencies for the platfor
 
 Called by `frontend`, `checkout-service`. It has no downstream dependencies.
 
+Pages: [architecture](architecture.md), [API](api.md), [configuration](configuration.md), [observability](observability.md), [operations](operations.md), [development](development.md), [decisions](adr/0001-static-eur-rates-file.md).
+
 ```mermaid
 flowchart LR
   currency_service["<b>currency-service</b><br/>7000 (gRPC)"]:::me

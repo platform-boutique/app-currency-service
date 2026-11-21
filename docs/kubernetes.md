@@ -32,8 +32,8 @@ The Node health handler implements `Check` only (no `Watch`); Kubernetes `grpc:`
 ```yaml
 securityContext:
   runAsNonRoot: true
-  runAsUser: 100
-  runAsGroup: 101
+  runAsUser: 10001
+  runAsGroup: 10001
   allowPrivilegeEscalation: false
   capabilities: { drop: ["ALL"] }
   readOnlyRootFilesystem: true   # verified (no /tmp needed)

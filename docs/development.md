@@ -1,5 +1,23 @@
 # Develop & test
 
+## Checks and commands
+
+Requirements: Node.js 22 (`.nvmrc`; the table below was produced on the host's Node 24.14.0 after `npm ci --ignore-scripts`), Docker for the image, Python 3.12 for the docs check. The commands below are the ones the shared pipeline (`platform-demo-workflows`, `service-ci-node`) runs, so a failure can be reproduced without pushing. `Running locally` above has the run commands.
+
+| Step | Command | Result on 2026-11-21 |
+|---|---|---|
+| Format | `npm run format:check` | run, all matched files use Prettier code style |
+| Typecheck | `npm run typecheck` | run, passed |
+| Lint | `npm run lint` | run, 0 errors, 5 warnings (`no-explicit-any`) |
+| Build | `npm run build` | run, passed |
+| Unit tests | `npm run test:ci` | run: 84 passed in 6 suites, on Node 24.14.0 of the host (the repo pins Node 22.22.2 in `.nvmrc` and the Dockerfile; not run on 22) |
+| Dependency audit | `npm audit --audit-level=high --omit=dev` | run: found 0 vulnerabilities |
+| Image | `docker build -t platform-demo/currency-service:local .` | not run today |
+| Image scan | `trivy image --severity CRITICAL,HIGH --exit-code 1 platform-demo/currency-service:local` | not run today |
+| Secret scan | `pre-commit run --all-files` (`.pre-commit-config.yaml`, gitleaks) or `gitleaks git --redact` | run with the gitleaks binary of the pre-commit cache (`gitleaks git --redact`, full history, 49 commits): no leaks found |
+| Workflow lint | `actionlint` | run (actionlint 1.7.12), no findings |
+| Docs | `mkdocs build --strict` (mkdocs 1.6.1 + mkdocs-techdocs-core 1.7.1, Python 3.12 venv) and the link check `python3 -I tools/check-md-links.py .` from `platform-demo-workflows` (relative links in `README.md` and `docs/`) | run, both passed |
+
 ## Running locally
 
 Requirements: Node.js 22 (`.nvmrc`), Docker, [`grpcurl`](https://github.com/fullstorydev/grpcurl).
@@ -45,5 +63,5 @@ grpcurl -plaintext -proto proto/health.proto localhost:7000 grpc.health.v1.Healt
 ├── package.json / package-lock.json / tsconfig.json
 ├── Dockerfile
 ├── .dockerignore / .nvmrc / .eslintrc.cjs / .prettierrc / .trivyignore
-└── docs/                # empty placeholder
+└── docs/                # TechDocs pages (mkdocs.yml in the root), docs/adr/ = decisions
 ```
