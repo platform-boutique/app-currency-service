@@ -6,13 +6,17 @@ repo_url: https://github.com/platform-boutique/app-currency-service
 edit_uri: edit/main/docs/
 nav:
   - Overview: index.md
+  - Architecture: architecture.md
   - API: api.md
   - Configuration: configuration.md
   - Container image: container-image.md
   - Kubernetes: kubernetes.md
   - Observability: observability.md
+  - Operations: operations.md
   - Develop & test: development.md
   - Known limitations: limitations.md
+  - Decisions:
+      - "1. Static EUR-based rates file": adr/0001-static-eur-rates-file.md
 theme:
   name: material
   features:
