@@ -1,5 +1,5 @@
 # ---- Build stage ----
-FROM node:22.22.2-alpine3.23 AS builder
+FROM node:22.22.2-alpine3.23@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f AS builder
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ RUN npm run build
 RUN npm prune --omit=dev
 
 # ---- Runtime stage ----
-FROM node:22.22.2-alpine3.23 AS runtime
+FROM node:22.22.2-alpine3.23@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f AS runtime
 
 ARG SERVICE_VERSION=dev
 ARG SERVICE_COMMIT=unknown
