@@ -75,7 +75,7 @@ Multi-stage [`Dockerfile`](Dockerfile):
 - **User:** numeric `USER 10001:10001` (`appuser`/`appgroup`, created with these fixed ids; `id` in the container prints `uid=10001(appuser) gid=10001(appgroup)`). Build args `SERVICE_VERSION` (default `dev`) and `SERVICE_COMMIT` (default `unknown`) set the OCI labels `version`/`revision` (plus `source`, `licenses=Apache-2.0`) and the ENV of the same names.
 - **EXPOSE:** `7000` only.
 - **Docker `HEALTHCHECK`:** a `grpc-js` client connecting to `localhost:$PORT`, falling back to 7000 like the server (it used to probe `localhost:undefined` when `PORT` was unset; fixed and checked on a rebuilt image: `healthy` with `PORT` unset). Kubernetes ignores this check anyway.
-- **Image size:** ~73 MB.
+- **Image size:** content size 71 MB (322 MB unpacked on disk, 2026-11-22).
 
 ## Kubernetes deployment notes
 
@@ -182,21 +182,25 @@ grpcurl -plaintext -proto proto/health.proto localhost:7000 grpc.health.v1.Healt
 
 ## Develop
 
-Requirements: Node.js 22 (`.nvmrc`; the table below was produced on the host's Node 24.14.0 after `npm ci --ignore-scripts`), Docker for the image, Python 3.12 for the docs check. The commands below are the ones the shared pipeline (`platform-demo-workflows`, `service-ci-node`) runs, so a failure can be reproduced without pushing. `Running locally` above has the run commands.
+Requirements: Node.js 22 (`.nvmrc`; the table below was produced on 2026-11-22 on the host's Node 24.14.0 after `npm ci --ignore-scripts` and again in the CI image `node:22.22.2-alpine3.23`), Docker for the image, Python 3.12 for the docs check. The commands below are the ones the shared pipeline (`platform-demo-workflows`, `service-ci-node`) runs, so a failure can be reproduced without pushing. `Running locally` above has the run commands.
 
-| Step | Command | Result on 2026-11-21 |
+| Step | Command | Result on 2026-11-22 |
 |---|---|---|
-| Format | `npm run format:check` | run, all matched files use Prettier code style |
-| Typecheck | `npm run typecheck` | run, passed |
-| Lint | `npm run lint` | run, 0 errors, 5 warnings (`no-explicit-any`) |
-| Build | `npm run build` | run, passed |
-| Unit tests | `npm run test:ci` | run: 84 passed in 6 suites, on Node 24.14.0 of the host (the repo pins Node 22.22.2 in `.nvmrc` and the Dockerfile; not run on 22) |
-| Dependency audit | `npm audit --audit-level=high --omit=dev` | run: found 0 vulnerabilities |
-| Image | `docker build -t platform-demo/currency-service:local .` | not run today |
-| Image scan | `trivy image --severity CRITICAL,HIGH --exit-code 1 platform-demo/currency-service:local` | not run today |
-| Secret scan | `pre-commit run --all-files` (`.pre-commit-config.yaml`, gitleaks) or `gitleaks git --redact` | run with the gitleaks binary of the pre-commit cache (`gitleaks git --redact`, full history, 49 commits): no leaks found |
-| Workflow lint | `actionlint` | run (actionlint 1.7.12), no findings |
+| Format | `npm run format:check` | run on Node 24.14.0 (host) and on Node 22.22.2 (`node:22.22.2-alpine3.23` container, full `npm ci`): all matched files use Prettier code style |
+| Typecheck | `npm run typecheck` | run on both, passed |
+| Lint | `npm run lint` | run on both, 0 errors, 5 warnings (`no-explicit-any`) |
+| Build | `npm run build` | run on both, passed |
+| Unit tests | `npm run test:ci` | run on both: 84 passed in 6 suites; coverage 93.5 % statements, 85.1 % branches (`--coverage`, `server.ts`, `telemetry.ts` and `client.ts` are excluded) |
+| Dependency audit | `npm audit --audit-level=high --omit=dev` (CI) | run on both: found 0 vulnerabilities. The full `npm audit` (with dev dependencies) lists 6 moderate findings, all one `minimatch` ReDoS advisory (GHSA-g3hv-75wg-m249) reached through the dev-only `@typescript-eslint` 7 packages; see the accepted exception in `limitations.md` |
+| SAST | `semgrep scan --config p/typescript --config p/nodejs --config p/secrets --error --metrics=off` (semgrep 1.180.0, as CI) | run, 111 rules on 51 files: 0 findings |
+| Image | `docker build --platform linux/amd64 -t platform-demo/currency-service:local .` | run, passed; both `FROM` lines carry `@sha256:`; content size 71 MB (322 MB unpacked disk usage), user `10001:10001` |
+| Image scan | `trivy image --severity CRITICAL,HIGH --exit-code 1 platform-demo/currency-service:local` (Trivy 0.76.1) | run, exit 0 (alpine 3.23.4 and all Node packages: 0 findings) |
+| Container | `docker ps` health, whole shop `local/up.sh` + `local/smoke.sh` | run: the exec-form `HEALTHCHECK` reports `healthy`; `SMOKE PASSED` (87 PASS) three times in a row with this image in the shop; 0 error log lines from the service |
+| Secret scan | `pre-commit run --all-files` (`.pre-commit-config.yaml`, gitleaks) or `gitleaks git --redact` | run with the gitleaks binary of the pre-commit cache (`gitleaks git --redact`, full history, 56 commits): no leaks found |
+| Workflow lint | `actionlint` | run on 2026-11-21 (actionlint 1.7.12), no findings; not re-run for the workflows v3.8.0 pin change |
 | Docs | `mkdocs build --strict` (mkdocs 1.6.1 + mkdocs-techdocs-core 1.7.1, Python 3.12 venv) and the link check `python3 -I tools/check-md-links.py .` from `platform-demo-workflows` (relative links in `README.md` and `docs/`) | run, both passed |
+
+Not run: OTLP export against a real collector (the metrics are pushed, there is no scrape endpoint; the unit tests cover `build_info` and the RPC instruments), several replicas, `docker stop` timing of this image.
 
 ## Project structure
 
@@ -206,6 +210,8 @@ Requirements: Node.js 22 (`.nvmrc`; the table below was produced on the host's N
 │   ├── currency.ts      # pure conversion logic (carry, convertMoney)
 │   ├── telemetry.ts     # OTel SDK, RPC metrics, runtime gauges, Pyroscope (each only when enabled), bounded shutdown
 │   ├── telemetryConfig.ts  # telemetry contract (pure functions, unit tested)
+│   ├── metrics.ts       # build_info gauge
+│   ├── reflection.ts    # gRPC server reflection (v1, v1alpha)
 │   ├── logger.ts        # pino factory: shared log shape, trace ids from the active span
 │   ├── fatal.ts         # uncaught exceptions / rejections as one JSON line, exit 1
 │   └── client.ts        # smoke-test client
@@ -224,3 +230,4 @@ Requirements: Node.js 22 (`.nvmrc`; the table below was produced on the host's N
 - Conversion uses floating-point arithmetic and truncates; results can be off by a nano-unit.
 - With telemetry off the OTel SDK and Pyroscope modules are still loaded (static imports, including the pprof native module); they are just never started.
 - Health stays `SERVING` during the 2 s shutdown drain (it is static).
+- Accepted exception, 2026-11-22: `npm audit` (all dependencies) reports one moderate `minimatch` advisory (GHSA-g3hv-75wg-m249, ReDoS) through the dev-only `@typescript-eslint` 7 packages; the fix is a major bump of the lint toolchain (`@typescript-eslint` 8). It is not in the image (`npm prune --omit=dev`) and CI audits with `--omit=dev`, which finds 0. Revisit only if the lint toolchain is updated for another reason.
