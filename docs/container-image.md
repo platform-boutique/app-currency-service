@@ -11,4 +11,4 @@ Multi-stage [`Dockerfile`](https://github.com/platform-boutique/app-currency-ser
 - **User:** numeric `USER 10001:10001` (`appuser`/`appgroup`, created with these fixed ids; `id` in the container prints `uid=10001(appuser) gid=10001(appgroup)`). Build args `SERVICE_VERSION` (default `dev`) and `SERVICE_COMMIT` (default `unknown`) set the OCI labels `version`/`revision` (plus `source`, `licenses=Apache-2.0`) and the ENV of the same names.
 - **EXPOSE:** `7000` only.
 - **Docker `HEALTHCHECK`:** a `grpc-js` client connecting to `localhost:$PORT`, falling back to 7000 like the server (it used to probe `localhost:undefined` when `PORT` was unset; fixed and checked on a rebuilt image: `healthy` with `PORT` unset). Kubernetes ignores this check anyway.
-- **Image size:** ~73 MB.
+- **Image size:** content size 71 MB (322 MB unpacked on disk), measured 2026-11-22.
