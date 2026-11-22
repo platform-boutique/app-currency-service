@@ -30,7 +30,7 @@ jobs:
       packages: write
       id-token: write # keyless cosign signing
       actions: read # the approval jobs read who approved the environments stage and prod of this run
-    uses: platform-boutique/platform-demo-workflows/.github/workflows/service-publish.yaml@a277aeb9226f9b2905cbf9d77626f69bd770f486 # v3.7.0
+    uses: platform-boutique/platform-demo-workflows/.github/workflows/service-publish.yaml@ddd1b5886b308984e6240714010af7f1d88b2e9f # test
     with:
       app: currency-service
       trivyignores: .trivyignore
